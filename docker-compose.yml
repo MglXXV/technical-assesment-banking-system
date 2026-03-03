@@ -1,0 +1,75 @@
+services:
+  # Base de Datos Relacional (Identidad y Sesiones)
+  db_users:
+    image: postgres:15-alpine
+    container_name: bank_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password123}
+      POSTGRES_DB: bank_auth
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - banking-network
+
+  # Ledger Financiero (TigerBeetle)
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle
+    container_name: bank_ledger
+    restart: always
+    privileged: true 
+    entrypoint: 
+      - /bin/sh
+      - -c
+      - |
+        TB_DATA_FILE="/data/0_0.tigerbeetle"
+        if [ ! -f "$$TB_DATA_FILE" ]; then
+          echo "Formateando TigerBeetle..."
+          ./tigerbeetle format --cluster=0 --replica=0 --replica-count=1 "$$TB_DATA_FILE"
+        fi
+        echo "Iniciando TigerBeetle..."
+        ./tigerbeetle start --development --addresses=0.0.0.0:3000 "$$TB_DATA_FILE"
+    ports:
+      - "3000:3000"
+    volumes:
+      - tb_data:/data 
+    networks:
+      - banking-network
+
+  # API Backend en Go
+  api:
+    build: ./api
+    container_name: bank_api
+    platform: linux/amd64
+    restart: always
+    privileged: true  
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_URL=postgres://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-password123}@db_users:5432/bank_auth?sslmode=disable
+      - TB_ADDRESS=bank_ledger:3000
+      - JWT_SECRET=${JWT_SECRET}
+    depends_on:
+      - db_users
+      - tigerbeetle
+    networks:
+      - banking-network
+    security_opt:
+      - seccomp:unconfined
+    ulimits:
+      memlock: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+
+volumes:
+  postgres_data:
+  tb_data:
+
+networks:
+  banking-network:
+    external: true
