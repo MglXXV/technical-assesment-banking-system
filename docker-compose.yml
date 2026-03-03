@@ -50,7 +50,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - DB_URL=postgres://${POSTGRES_USER:-admin}:${POSTGRES_PASSWORD:-password123}@db_users:5432/bank_auth?sslmode=disable
+      - DB_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db_users:5432/bank_auth?sslmode=disable
       - TB_ADDRESS=bank_ledger:3000
       - JWT_SECRET=${JWT_SECRET}
     depends_on:
