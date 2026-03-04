@@ -1,8 +1,10 @@
 package main
 
 import (
+	"banking-system/src/chat"
 	"banking-system/src/controllers"
 	"banking-system/src/middleware"
+	"context"
 	"log"
 	"net"
 	"net/http"
@@ -12,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	tigerbeetle "github.com/tigerbeetle/tigerbeetle-go"
 	"github.com/tigerbeetle/tigerbeetle-go/pkg/types"
+	"google.golang.org/api/option"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -79,6 +82,19 @@ func main() {
 	authCtrl := &controllers.AuthController{DB: db, TB: tbClient}
 	ledgerCtrl := &controllers.LedgerController{DB: db, TB: tbClient}
 
+	ctx := context.Background()
+	apiKey := os.Getenv("GEMINI_API_KEY")
+
+	engine, err := chat.NewMCPEngine(ctx, option.WithAPIKey(apiKey), option.WithEndpoint("https://generativelanguage.googleapis.com/v1beta"))
+	if err != nil {
+		log.Fatalf("❌ Error fatal inicializando Gemini: %v", err)
+	}
+
+	// Verifica que no sea nil justo antes de pasarla
+	if engine == nil || engine.Model == nil {
+		log.Fatal("❌ El engine se creó pero el Modelo es nil")
+	}
+
 	// Single API Group
 	api := r.Group("/api")
 	{
@@ -86,12 +102,12 @@ func main() {
 		api.POST("/register", authCtrl.Register)
 		api.POST("/login", authCtrl.Login)
 		api.GET("/users", authCtrl.ListUsers)
-		api.POST("/logout", authCtrl.Logout)
 
 		// Protected Endpoints Sub-group
 		protected := api.Group("/")
 		protected.Use(middleware.AuthRequired())
 		{
+			protected.POST("/logout", authCtrl.Logout)
 
 			protected.POST("/accounts/create", ledgerCtrl.CreateAccount)
 
@@ -99,6 +115,8 @@ func main() {
 			protected.POST("/deposit", ledgerCtrl.Deposit)
 			protected.POST("/transfer", ledgerCtrl.Transfer)
 			protected.GET("/history", ledgerCtrl.GetHistory)
+			protected.POST("/chat", chat.ChatHandler(engine, ledgerCtrl))
+			protected.DELETE("/accounts/:id", ledgerCtrl.DeleteAccount)
 		}
 	}
 

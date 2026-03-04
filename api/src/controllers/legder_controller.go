@@ -356,3 +356,60 @@ func (ctrl *LedgerController) GetHistory(c *gin.Context) {
 		"history":    readableHistory,
 	})
 }
+
+func (ctrl *LedgerController) DeleteAccount(c *gin.Context) {
+	userID := c.MustGet("userID").(string)
+	accountIDToDelete := c.Param("id") // El tb_id de la cuenta
+
+	var user models.Users
+	if err := ctrl.DB.Where("uuid_user = ?", userID).First(&user).Error; err != nil {
+		c.JSON(404, gin.H{"error": "Usuario no encontrado"})
+		return
+	}
+
+	// 1. Parsear las cuentas actuales
+	var accounts []UserAccount
+	if err := json.Unmarshal([]byte(user.TBAccountID), &accounts); err != nil {
+		c.JSON(500, gin.H{"error": "Error al procesar cuentas del usuario"})
+		return
+	}
+
+	// 2. Filtrar la cuenta a eliminar y verificar saldo si es posible
+	var updatedAccounts []UserAccount
+	found := false
+
+	for _, acc := range accounts {
+		if acc.TBID == accountIDToDelete {
+			found = true
+			// OPCIONAL: Podrías hacer un Lookup en TigerBeetle aquí
+			// y abortar si balance != 0
+			continue
+		}
+		updatedAccounts = append(updatedAccounts, acc)
+	}
+
+	if !found {
+		c.JSON(404, gin.H{"error": "La cuenta no existe o no te pertenece"})
+		return
+	}
+
+	// 3. Actualizar en Postgres
+	updatedJSON, _ := json.Marshal(updatedAccounts)
+
+	// Usamos Exec para asegurar que el JSONB se guarde correctamente como hicimos antes
+	errUpdate := ctrl.DB.Exec(
+		"UPDATE users SET tb_account_id = ? WHERE uuid_user = ?",
+		string(updatedJSON),
+		userID,
+	).Error
+
+	if errUpdate != nil {
+		c.JSON(500, gin.H{"error": "No se pudo actualizar el registro en la base de datos"})
+		return
+	}
+
+	c.JSON(200, gin.H{
+		"message":         "Cuenta eliminada exitosamente del perfil",
+		"deleted_account": accountIDToDelete,
+	})
+}
