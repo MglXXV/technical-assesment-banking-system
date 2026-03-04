@@ -1,46 +1,43 @@
 services:
-  # Base de Datos Relacional (Identidad y Sesiones)
+  # ================================================
+  # Relational Database (Identity and Sessions)
+  # ================================================
   db_users:
     image: postgres:15-alpine
     container_name: bank_postgres
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password123}
-      POSTGRES_DB: bank_auth
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
-      - ./scripts/init_postgres.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:z
       - postgres_data:/var/lib/postgresql/data
     networks:
       - banking-network
 
-  # Ledger Financiero (TigerBeetle)
+  # ================================================
+  # Financial Ledger (TigerBeetle)
+  # ================================================
   tigerbeetle:
     image: ghcr.io/tigerbeetle/tigerbeetle
     container_name: bank_ledger
     restart: always
     privileged: true 
-    entrypoint: 
-      - /bin/sh
-      - -c
-      - |
-        TB_DATA_FILE="/data/0_0.tigerbeetle"
-        if [ ! -f "$$TB_DATA_FILE" ]; then
-          echo "Formateando TigerBeetle..."
-          ./tigerbeetle format --cluster=0 --replica=0 --replica-count=1 "$$TB_DATA_FILE"
-        fi
-        echo "Iniciando TigerBeetle..."
-        ./tigerbeetle start --development --addresses=0.0.0.0:3000 "$$TB_DATA_FILE"
+    entrypoint: ["/bin/sh", "/scripts/init_tigerbeetle.sh"]
     ports:
       - "3000:3000"
     volumes:
-      - tb_data:/data 
+      - tb_data:/data
+      - ./database/init_tigerbeetle.sh:/scripts/init_tigerbeetle.sh:z
     networks:
       - banking-network
 
-  # API Backend en Go
+  # ================================================
+  # Go Backend API
+  # ================================================
   api:
     build: ./api
     container_name: bank_api
@@ -50,9 +47,12 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - DB_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db_users:5432/bank_auth?sslmode=disable
-      - TB_ADDRESS=bank_ledger:3000
+      - DB_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db_users:5432/${POSTGRES_DB}?sslmode=disable
+      - TB_ADDRESS=${TIGERBEETLE_ADDRESS}
       - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRATION=${JWT_EXPIRATION_HOURS}
+      - GIN_MODE=${GIN_MODE}
+      - PORT=${SERVER_PORT}
     depends_on:
       - db_users
       - tigerbeetle
@@ -65,6 +65,27 @@ services:
       nofile:
         soft: 65536
         hard: 65536
+
+  # ================================================
+  # VITE Frontend with Vite + Svelte
+  # ================================================
+  web:
+    build: ./web
+    container_name: bank_web
+    ports:
+      - "5173:5173"
+    volumes:
+      # Synchronize your local code with the container for Hot Reload
+      - ./web:/app:z
+      # Prevents your local node_modules folder from overwriting the one in the container
+      - /app/node_modules
+    environment:
+      # Forces Vite to detect file changes on Linux/Fedora systems
+      - CHOKIDAR_USEPOLLING=true
+      # We tell the frontend where our API lives
+      - VITE_API_URL=http://localhost:8080/api
+    depends_on:
+      - api
 
 volumes:
   postgres_data:
