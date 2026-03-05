@@ -15,9 +15,9 @@ type Users struct {
 	UserEmail     string         `gorm:"column:user_email"`
 	UserPassword  string         `gorm:"column:user_password"`
 	TBAccountID   string         `gorm:"column:tb_account_id;type:jsonb"`
-	UserCreatedAt time.Time      `gorm:"column:user_created_at"`
-	UserUpdatedAt time.Time      `gorm:"column:user_updated_at"`
-	UserDeletedAt gorm.DeletedAt `gorm:"column:user_deleted_at"`
+	UserCreatedAt time.Time      `gorm:"column:user_created_at;autocreateTime"`
+	UserUpdatedAt time.Time      `gorm:"column:user_updated_at;autoupdateTime"`
+	UserDeletedAt gorm.DeletedAt `gorm:"column:user_deleted_at;index"`
 }
 
 // BeforeCreate is a GORM Hook that ensures a UUID is generated before insertion.

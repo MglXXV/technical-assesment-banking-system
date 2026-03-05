@@ -40,7 +40,11 @@ func (ctrl *AuthController) Register(c *gin.Context) {
 	}
 
 	if err := ctrl.DB.Create(&user).Error; err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "User already exists"})
+		// This will tell you if it failed because of tb_account_id, email, or connection
+		c.JSON(http.StatusConflict, gin.H{
+			"error":   "Could not create user",
+			"details": err.Error(),
+		})
 		return
 	}
 
@@ -71,25 +75,25 @@ func (ctrl *AuthController) Login(c *gin.Context) {
 }
 
 func (ctrl *AuthController) Logout(c *gin.Context) {
-	// En una implementación básica con JWT, el logout lo maneja el cliente
-	// borrando el token. Aquí podemos registrar el evento o limpiar cookies.
+	// In a basic implementation with JWT, the logout is handled by the client
+	// by deleting the token. Here we can register the event or clear cookies.
 
 	c.JSON(http.StatusOK, gin.H{
-		"message": "Sesión cerrada exitosamente",
+		"message": "Session closed successfully",
 	})
 }
 
-// ListUsers devuelve todos los usuarios registrados en PostgreSQL
+// ListUsers returns all registered users in PostgreSQL
 func (ctrl *AuthController) ListUsers(c *gin.Context) {
 	var users []models.Users
 
-	// Consultamos todos los registros de la tabla users
+	// We query all records from the users table
 	if err := ctrl.DB.Find(&users).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not fetch users"})
 		return
 	}
 
-	// Si la lista está vacía, enviamos un mensaje informativo
+	// If the list is empty, we send an informational message
 	if len(users) == 0 {
 		c.JSON(http.StatusOK, gin.H{"message": "No users found in database", "count": 0})
 		return

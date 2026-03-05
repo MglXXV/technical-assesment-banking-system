@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS Users (
     user_password VARCHAR(255) NOT NULL,
 
     -- TigerBeetle Account Reference
-    tb_account_id TEXT UNIQUE NOT NULL,
+    tb_account_id TEXT NOT NULL DEFAULT '[]',
 
     -- Audit Timestamps
     -- Using TIMESTAMPTZ to ensure timezone consistency
@@ -30,4 +30,4 @@ CREATE TABLE IF NOT EXISTS Users (
 CREATE INDEX IF NOT EXISTS idx_users_email ON User(user_email);
 
 -- Index for optimized soft delete queries (GORM standard)
-CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON User(user_deleted_at);
+CREATE INDEX IF NOT EXISTS idx_users_deleted_at ON Users(user_deleted_at);
