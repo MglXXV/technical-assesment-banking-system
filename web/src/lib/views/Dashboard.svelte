@@ -7,6 +7,7 @@
   import AccountCard from "../components/AccountCard.svelte";
   import TransactionModal from "../components/TransactionModal.svelte";
   import HistoryModal from "../components/HistoryModal.svelte";
+  import BankingPanel from "../components/BankingPanel.svelte";
 
   let accounts = [];
   let message = "";
@@ -131,10 +132,7 @@
         historyTransactions = data.history || [];
       } else {
         const err = await res.json();
-        showNotification(
-          err.error || "Could not load history",
-          "error",
-        );
+        showNotification(err.error || "Could not load history", "error");
         showHistory = false;
       }
     } catch (error) {
@@ -182,59 +180,53 @@
         }),
       });
 
+      const rawText = await res.text();
       
 
       if (!res.ok) {
         const errData = await res
           .json()
           .catch(() => ({ error: `HTTP ${res.status}` }));
-        throw new Error(errData.error || "Internal server error");
+        throw new Error(`HTTP ${res.status}: ${rawText}`);
       }
 
-      const data = await res.json();
-      let botReply = data.reply || data.response || "Command processed.";
+      const data = JSON.parse(rawText);
+      let botReply = data.reply || data.response || "";
 
-      // PARSING INTELLIGENCE: If the AI returns a JSON instead of text
-      try {
-        const parsed = JSON.parse(botReply);
 
-        // If it is a successful transaction
-        if (parsed.status === "éxito" || parsed.success) {
-          botReply =
-            `✅ **Done!**\nI have processed your transaction correctly.\n\n` +
-            `**Reference ID:** \`${parsed.tx || parsed.transfer_id}\``;
+      if (!botReply) {
+        chatHistory = [
+          ...chatHistory,
+          {
+            role: "assistant",
+            content: "❌ I didn't received an answer from the server.",
+          },
+        ];
+        return;
+      }
 
-          // We refresh the balances and launch the success notification
-          await fetchBalance();
-          showNotification("Successful AI transaction", "success");
+      // Solo parsea si parece JSON puro
+      if (botReply.trim().startsWith("{") || botReply.trim().startsWith("[")) {
+        try {
+          const parsed = JSON.parse(botReply);
+          if (parsed.status === "success" && parsed.tx) {
+            botReply = `✅ Operation successful.\nID: ${parsed.tx}`;
+            await fetchBalance();
+            showNotification("Transaction successful", "success");
+          } else if (parsed.status === "error") {
+            botReply = `❌ ${parsed.message}`;
+          }
+        } catch (e) {
+          /* no es JSON, usar texto original */
         }
-        // If it is an error
-        else if (parsed.error) {
-          botReply = `❌ **I could not complete the operation:**\n${parsed.error}`;
-        }
-        // If it is a history (array)
-        else if (Array.isArray(parsed)) {
-          botReply =
-            "Here are your last movements:\n\n" +
-            parsed
-              .map(
-                (t) =>
-                  `🔹 ${t.fecha.substring(0, 10)}: **${t.tipo}** of $${t.monto}`,
-              )
-              .join("\n");
-        }
-        // If it is another JSON, we show it nicely
-        else {
-          botReply = JSON.stringify(parsed, null, 2);
-        }
-      } catch (e) {
-        // If the parsing fails, it means it is normal text (e.g. "Hello! How can I help you?").
-        // We leave it exactly as the AI wrote it.
-
-        // We refresh balances just in case the AI did something silently
+      } else {
+        // Texto normal — refrescar si fue operación
+        const lower = botReply.toLowerCase();
         if (
-          botReply.toLowerCase().includes("transfer") ||
-          botReply.toLowerCase().includes("éxito")
+          lower.includes("exitosa") ||
+          lower.includes("depósito") ||
+          lower.includes("retiro") ||
+          lower.includes("transferencia")
         ) {
           await fetchBalance();
         }
@@ -247,8 +239,7 @@
         ...chatHistory,
         {
           role: "assistant",
-          content:
-            "❌ I'm sorry, I lost connection with the Nexora servers.",
+          content: "❌ I'm sorry, I lost connection with the Nexora servers.",
         },
       ];
     } finally {
@@ -326,9 +317,7 @@
       } else {
         const errData = await res.json();
         const errorMsg =
-          typeof errData.error === "string"
-            ? errData.error
-            : "Check the data";
+          typeof errData.error === "string" ? errData.error : "Check the data";
         showNotification("Transaction rejected: " + errorMsg, "error");
       }
     } catch (err) {
@@ -408,15 +397,17 @@
         >Nexora<span class="text-slate-500 font-light">Bank</span></span
       >
     </div>
-        <div class="flex items-center gap-6">
-          <span class="text-sm font-medium text-slate-600">Hello, {displayName}</span>
-          <button
-            on:click={handleLogout}
-            class="text-sm font-bold text-slate-400 hover:text-rose-600 transition-colors"
-          >
-            Log out
-          </button>
-        </div>
+    <div class="flex items-center gap-6">
+      <span class="text-sm font-medium text-slate-600"
+        >Hello, {displayName}</span
+      >
+      <button
+        on:click={handleLogout}
+        class="text-sm font-bold text-slate-400 hover:text-rose-600 transition-colors"
+      >
+        Log out
+      </button>
+    </div>
   </header>
 
   <div
@@ -502,8 +493,7 @@
                 No active accounts
               </h3>
               <p class="text-slate-500 text-sm">
-                Create a "New Account" to start managing your funds in
-                Nexora.
+                Create a "New Account" to start managing your funds in Nexora.
               </p>
             </div>
           {:else}
@@ -519,80 +509,7 @@
           {/if}
         </div>
 
-        <div
-          class="bg-white rounded-3xl shadow-lg border border-slate-100 flex flex-col h-[520px] overflow-hidden"
-        >
-          <div
-            class="bg-blue-700 p-5 text-white flex justify-between items-center"
-          >
-            <h3 class="font-bold flex items-center gap-2">
-              <svg
-                class="w-5 h-5 opacity-80"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-                ><path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
-                /></svg
-              >
-              Nexora Assistant
-            </h3>
-            {#if loadingChat}
-              <span class="flex h-3 w-3 relative">
-                <span
-                  class="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-300 opacity-75"
-                ></span>
-                <span class="relative inline-flex rounded-full h-3 w-3 bg-white"
-                ></span>
-              </span>
-            {/if}
-          </div>
-
-          <div
-            id="chat-container"
-            class="flex-1 overflow-y-auto p-5 space-y-4 bg-slate-50/50 scroll-smooth"
-          >
-            {#each chatHistory as msg}
-              <div
-                class="flex {msg.role === 'user'
-                  ? 'justify-end'
-                  : 'justify-start'}"
-              >
-                <div
-                  class="max-w-[85%] p-3.5 rounded-2xl text-sm shadow-sm {msg.role ===
-                  'user'
-                    ? 'bg-blue-700 text-white rounded-br-none'
-                    : 'bg-white border border-slate-100 text-slate-700 rounded-bl-none'}"
-                >
-                  <pre
-                    class="whitespace-pre-wrap font-sans m-0 leading-relaxed">{msg.content}</pre>
-                </div>
-              </div>
-            {/each}
-          </div>
-
-          <form
-            on:submit|preventDefault={() => sendMessage()}
-            class="p-4 bg-white border-t border-slate-100 flex gap-3"
-          >
-            <input
-              bind:value={message}
-              placeholder="Type a command..."
-              class="flex-1 px-4 py-3 bg-slate-100 rounded-xl outline-none focus:ring-2 focus:ring-blue-600 transition-shadow disabled:opacity-50"
-              disabled={loadingChat}
-            />
-            <button
-              type="submit"
-              disabled={loadingChat}
-              class="bg-blue-700 text-white px-6 py-3 rounded-xl font-bold hover:bg-blue-800 transition-colors disabled:opacity-75 flex items-center gap-2"
-            >
-              <span>Send</span>
-            </button>
-          </form>
-        </div>
+        <BankingPanel {accounts} on:refresh={fetchBalance} />
       </div>
     </main>
   </div>

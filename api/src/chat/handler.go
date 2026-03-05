@@ -125,27 +125,51 @@ func ChatHandler(engine *MCPEngine, ledger *controllers.LedgerController) gin.Ha
 
 			finalMsg := finalResp.Choices[0].Message
 
-			// We only return user/assistant for the frontend
-			var cleanHistory []map[string]string
-			for _, m := range messages {
-				if m.Role == "user" || m.Role == "assistant" {
-					if m.Content != "" {
-						cleanHistory = append(cleanHistory, map[string]string{
-							"role":    m.Role,
-							"content": m.Content,
-						})
+			replyContent := finalMsg.Content
+			if replyContent == "" {
+				for _, m := range messages {
+					if m.Role == "tool" && m.Content != "" {
+						var toolResult map[string]interface{}
+						if err := json.Unmarshal([]byte(m.Content), &toolResult); err == nil {
+							if status, ok := toolResult["status"].(string); ok && status == "success" {
+								if tx, ok := toolResult["tx"].(string); ok {
+									replyContent = fmt.Sprintf("✅ Operación realizada exitosamente.\nID de referencia: %s", tx)
+								} else if msg, ok := toolResult["message"].(string); ok {
+									replyContent = fmt.Sprintf("✅ %s", msg)
+								} else {
+									replyContent = "✅ Operación realizada exitosamente."
+								}
+							} else if status == "error" {
+								if errMsg, ok := toolResult["message"].(string); ok {
+									replyContent = fmt.Sprintf("❌ %s", errMsg)
+								}
+							}
+						}
+						break
 					}
 				}
 			}
-			if finalMsg.Content != "" {
-				cleanHistory = append(cleanHistory, map[string]string{
-					"role":    "assistant",
-					"content": finalMsg.Content,
-				})
+
+			if replyContent == "" {
+				replyContent = "✅ Comando procesado."
 			}
 
+			var cleanHistory []map[string]string
+			for _, m := range messages {
+				if (m.Role == "user" || m.Role == "assistant") && m.Content != "" {
+					cleanHistory = append(cleanHistory, map[string]string{
+						"role":    m.Role,
+						"content": m.Content,
+					})
+				}
+			}
+			cleanHistory = append(cleanHistory, map[string]string{
+				"role":    "assistant",
+				"content": replyContent,
+			})
+
 			c.JSON(200, gin.H{
-				"reply":   finalMsg.Content,
+				"reply":   replyContent,
 				"history": cleanHistory,
 			})
 			return

@@ -465,10 +465,14 @@ func (lc *LedgerController) InternalTransfer(fromIdentifier string, toIdentifier
 
 	if fromIdentifier == "1" || fromIdentifier == "SYSTEM" {
 		fromTbID = types.ToUint128(1)
-	} else if len(fromIdentifier) == 32 || len(fromIdentifier) == 31 {
-		fromTbID, err = types.HexStringToUint128(fromIdentifier)
+	} else if len(fromIdentifier) >= 31 && len(fromIdentifier) <= 32 {
+		padded := fromIdentifier
+		if len(padded) == 31 {
+			padded = "0" + padded
+		}
+		fromTbID, err = types.HexStringToUint128(padded)
 		if err != nil {
-			return "", fmt.Errorf("invalid source identifier: %v", err)
+			return "", fmt.Errorf("identificador origen inválido: %v", err)
 		}
 	} else {
 		var fromUser models.Users
@@ -483,10 +487,15 @@ func (lc *LedgerController) InternalTransfer(fromIdentifier string, toIdentifier
 
 	if toIdentifier == "1" || toIdentifier == "SYSTEM" {
 		toTbID = types.ToUint128(1)
-	} else if len(toIdentifier) == 32 {
-		toTbID, err = types.HexStringToUint128(toIdentifier)
+	} else if len(toIdentifier) >= 31 && len(toIdentifier) <= 32 {
+		// Pad a 32 chars si tiene 31
+		padded := toIdentifier
+		if len(padded) == 31 {
+			padded = "0" + padded
+		}
+		toTbID, err = types.HexStringToUint128(padded)
 		if err != nil {
-			return "", fmt.Errorf("invalid destination identifier: %v", err)
+			return "", fmt.Errorf("identificador destino inválido: %v", err)
 		}
 	} else {
 		var toUser models.Users
