@@ -1,7 +1,7 @@
 package main
 
 import (
-	"banking-system/src/chat"
+	"banking-system/src/mcp"
 	"banking-system/src/controllers"
 	"banking-system/src/middleware"
 	"log"
@@ -75,7 +75,7 @@ func main() {
 	log.Println("✅ Connected to TigerBeetle")
 	bootstrapLedger(tbClient)
 
-	engine := chat.NewMCPEngine()
+	engine := mcp.NewMCPEngine()
 	if engine == nil || engine.Client == nil {
 		log.Fatal("❌ Fatal error: Could not initialize OpenAI engine")
 	}
@@ -108,7 +108,7 @@ func main() {
 			protected.POST("/transfer", ledgerCtrl.Transfer)
 			protected.GET("/history", ledgerCtrl.GetHistory)
 			protected.DELETE("/accounts/:id", ledgerCtrl.DeleteAccount)
-			protected.POST("/chat", chat.ChatHandler(engine, ledgerCtrl))
+			protected.POST("/chat", mcp.ChatHandler(engine, ledgerCtrl))
 		}
 	}
 

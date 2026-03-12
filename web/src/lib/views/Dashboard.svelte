@@ -153,10 +153,9 @@
 
   async function sendMessage(customMessage = null) {
     const userMsg = customMessage || message;
-    if (!userMsg.trim()) return;
+    if (!userMsg.trim() || loadingChat) return;
 
     message = "";
-    // We add the user's message
     chatHistory = [...chatHistory, { role: "user", content: userMsg }];
     loadingChat = true;
 
@@ -172,76 +171,42 @@
         },
         body: JSON.stringify({
           message: userMsg,
-          history: chatHistory
-            .filter((m) => m.role === "user" || m.role === "assistant")
-            .filter((m) => m.content && m.content.trim() !== "")
-            .slice(0, -1)
-            .map((m) => ({ role: m.role, content: m.content })),
+          history: chatHistory.slice(-8).map((m) => ({
+            role: m.role,
+            content: m.content,
+          })),
         }),
       });
 
-      const rawText = await res.text();
-      
+      if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
 
-      if (!res.ok) {
-        const errData = await res
-          .json()
-          .catch(() => ({ error: `HTTP ${res.status}` }));
-        throw new Error(`HTTP ${res.status}: ${rawText}`);
-      }
+      const data = await res.json();
+      let botReply = data.reply || "";
 
-      const data = JSON.parse(rawText);
-      let botReply = data.reply || data.response || "";
+      botReply = botReply
+        .replace(/\(tool_call\)[\s\S]*?(\]|\)|\s|$)/g, "")
+        .replace(/\(function=.*?\)/g, "")
+        .replace(/<\/?[^>]+(>|$)/g, "")
+        .trim();
 
+      if (!botReply) botReply = "Operación completada. ✅ ¿Necesitas algo más?";
 
-      if (!botReply) {
-        chatHistory = [
-          ...chatHistory,
-          {
-            role: "assistant",
-            content: "❌ I didn't received an answer from the server.",
-          },
-        ];
-        return;
-      }
-
-      // Solo parsea si parece JSON puro
-      if (botReply.trim().startsWith("{") || botReply.trim().startsWith("[")) {
-        try {
-          const parsed = JSON.parse(botReply);
-          if (parsed.status === "success" && parsed.tx) {
-            botReply = `✅ Operation successful.\nID: ${parsed.tx}`;
-            await fetchBalance();
-            showNotification("Transaction successful", "success");
-          } else if (parsed.status === "error") {
-            botReply = `❌ ${parsed.message}`;
-          }
-        } catch (e) {
-          /* no es JSON, usar texto original */
-        }
-      } else {
-        // Texto normal — refrescar si fue operación
-        const lower = botReply.toLowerCase();
-        if (
-          lower.includes("exitosa") ||
-          lower.includes("depósito") ||
-          lower.includes("retiro") ||
-          lower.includes("transferencia")
-        ) {
-          await fetchBalance();
-        }
-      }
-
-      // We add the formatted response to the chat
       chatHistory = [...chatHistory, { role: "assistant", content: botReply }];
+
+  
+      const lower = botReply.toLowerCase();
+      const needsRefresh = ["✅", "exitoso", "depositado", "retirado", "transferencia", "realizado"].some(word => lower.includes(word));
+
+      if (needsRefresh) {
+      
+        setTimeout(async () => {
+          await fetchBalance();
+          showNotification("Saldos actualizados en tiempo real", "success");
+        }, 400);
+      }
     } catch (error) {
-      chatHistory = [
-        ...chatHistory,
-        {
-          role: "assistant",
-          content: "❌ I'm sorry, I lost connection with the Nexora servers.",
-        },
-      ];
+      console.error("Chat error:", error);
+      chatHistory = [...chatHistory, { role: "assistant", content: "❌ Error de conexión." }];
     } finally {
       loadingChat = false;
       await tick();
@@ -273,6 +238,8 @@
 
   async function handleManualTransaction(event) {
     const { action, data } = event.detail;
+    if (isProcessingModal) return;
+
     isProcessingModal = true;
 
     let endpoint = "";

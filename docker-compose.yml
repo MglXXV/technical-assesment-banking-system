@@ -54,6 +54,8 @@ services:
       - GIN_MODE=${GIN_MODE}
       - PORT=${SERVER_PORT}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - MCP_MODEL=${MCP_MODEL}
+      - MCP_ENDPOINT=${MCP_ENDPOINT}
     depends_on:
       - db_users
       - tigerbeetle

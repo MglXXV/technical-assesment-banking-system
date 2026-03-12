@@ -1,8 +1,7 @@
-package chat
+package mcp
 
 import (
 	"os"
-
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -11,10 +10,17 @@ type MCPEngine struct {
 	Model  string
 }
 
+
 func NewMCPEngine() *MCPEngine {
+	
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 
-	// We configure the OpenAI SDK to talk to OpenRouter
+	model := os.Getenv("MCP_MODEL")
+	if model == "" {
+		model = "bytedance-seed/seed-2.0-mini" // Default free
+	}
+
+	
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = "https://openrouter.ai/api/v1"
 
@@ -22,7 +28,6 @@ func NewMCPEngine() *MCPEngine {
 
 	return &MCPEngine{
 		Client: client,
-		// We use Bytedance Seed 2.0 Mini (Free Version)
-		Model: "bytedance-seed/seed-2.0-mini",
+		Model:  model,
 	}
 }

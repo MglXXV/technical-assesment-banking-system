@@ -38,7 +38,7 @@ type TransferInput struct {
 	Amount          uint64 `json:"amount" binding:"required,gt=0"`
 }
 
-// CreateAccount opens a new TigerBeetle account and links it to the user in Postgres.
+// CreateAccount 
 func (ctrl *LedgerController) CreateAccount(c *gin.Context) {
 	userID := c.MustGet("userID").(string)
 
@@ -46,13 +46,13 @@ func (ctrl *LedgerController) CreateAccount(c *gin.Context) {
 		Type string `json:"type" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(400, gin.H{"error": "Account type required"})
+		c.JSON(400, gin.H{"error": "Tipo de cuenta requerido"})
 		return
 	}
 
 	var user models.Users
 	if err := ctrl.DB.Where("uuid_user = ?", userID).First(&user).Error; err != nil {
-		c.JSON(404, gin.H{"error": "User not found"})
+		c.JSON(404, gin.H{"error": "Usuario no encontrado"})
 		return
 	}
 
@@ -72,7 +72,7 @@ func (ctrl *LedgerController) CreateAccount(c *gin.Context) {
 		Flags:  types.AccountFlags{DebitsMustNotExceedCredits: true}.ToUint16(),
 	}})
 	if err != nil {
-		c.JSON(500, gin.H{"error": "Failed to create account in TigerBeetle"})
+		c.JSON(500, gin.H{"error": "Fallo al crear cuenta en TigerBeetle"})
 		return
 	}
 
@@ -83,31 +83,28 @@ func (ctrl *LedgerController) CreateAccount(c *gin.Context) {
 
 	newAcc := UserAccount{
 		AccountNumber: fmt.Sprintf("4001-%04d-%04d", len(accounts)+1, code),
-		TBID:          fmt.Sprintf("%032s", tbID.String()), // zero-pad to 32 chars
+		TBID:          fmt.Sprintf("%032s", tbID.String()), // Padding de 32 caracteres
 		Type:          input.Type,
 		Currency:      "USD",
 	}
 	accounts = append(accounts, newAcc)
 
 	updatedJSON, _ := json.Marshal(accounts)
-	if err := ctrl.DB.Exec(
-		"UPDATE users SET tb_account_id = ? WHERE uuid_user = ?",
-		string(updatedJSON), userID,
-	).Error; err != nil {
-		c.JSON(500, gin.H{"error": "Failed to sync with Postgres", "details": err.Error()})
+	if err := ctrl.DB.Model(&user).Update("tb_account_id", string(updatedJSON)).Error; err != nil {
+		c.JSON(500, gin.H{"error": "Fallo al sincronizar con Postgres"})
 		return
 	}
 
-	c.JSON(201, gin.H{"message": "Account opened and linked successfully", "account": newAcc})
+	c.JSON(201, gin.H{"message": "Cuenta creada con éxito", "account": newAcc})
 }
 
-// GetBalance returns the balance of all accounts for the authenticated user.
+// GetBalance 
 func (ctrl *LedgerController) GetBalance(c *gin.Context) {
 	userID := c.MustGet("userID").(string)
 
 	var user models.Users
 	if err := ctrl.DB.Where("uuid_user = ?", userID).First(&user).Error; err != nil {
-		c.JSON(404, gin.H{"error": "User not found"})
+		c.JSON(404, gin.H{"error": "Usuario no encontrado"})
 		return
 	}
 
@@ -116,7 +113,7 @@ func (ctrl *LedgerController) GetBalance(c *gin.Context) {
 
 	var tbIDs []types.Uint128
 	for _, acc := range accounts {
-		id, err := types.HexStringToUint128(acc.TBID)
+		id, err := types.HexStringToUint128(fmt.Sprintf("%032s", acc.TBID))
 		if err != nil {
 			continue
 		}
@@ -125,7 +122,7 @@ func (ctrl *LedgerController) GetBalance(c *gin.Context) {
 
 	tbAccounts, err := ctrl.TB.LookupAccounts(tbIDs)
 	if err != nil {
-		c.JSON(500, gin.H{"error": "Error querying TigerBeetle"})
+		c.JSON(500, gin.H{"error": "Error consultando TigerBeetle"})
 		return
 	}
 
@@ -136,11 +133,14 @@ func (ctrl *LedgerController) GetBalance(c *gin.Context) {
 		Type          string  `json:"type"`
 		TBID          string  `json:"tb_id"`
 	}
+
 	results := make([]AccountBalance, 0, len(tbAccounts))
 	for i, a := range tbAccounts {
 		credits := a.CreditsPosted.BigInt()
 		debits := a.DebitsPosted.BigInt()
-		balance := float64(new(big.Int).Sub(&credits, &debits).Int64()) / 100.0
+		diff := new(big.Int).Sub(&credits, &debits)
+		balance := float64(diff.Int64()) / 100.0
+
 		results = append(results, AccountBalance{
 			AccountNumber: accounts[i].AccountNumber,
 			Balance:       balance,
@@ -152,6 +152,139 @@ func (ctrl *LedgerController) GetBalance(c *gin.Context) {
 
 	c.JSON(200, gin.H{"accounts": results})
 }
+
+// GetBalancesInternal 
+func (lc *LedgerController) GetBalancesInternal(userID string) ([]map[string]interface{}, error) {
+	var user models.Users
+	if err := lc.DB.Where("uuid_user = ?", userID).First(&user).Error; err != nil {
+		return nil, err
+	}
+
+	var accounts []UserAccount
+	json.Unmarshal([]byte(user.TBAccountID), &accounts)
+
+	var results []map[string]interface{}
+	for _, acc := range accounts {
+		id, _ := types.HexStringToUint128(fmt.Sprintf("%032s", acc.TBID))
+		tbAccs, err := lc.TB.LookupAccounts([]types.Uint128{id})
+
+		balance := 0.0
+		if err == nil && len(tbAccs) > 0 {
+			credits := tbAccs[0].CreditsPosted.BigInt()
+			debits := tbAccs[0].DebitsPosted.BigInt()
+			diff := new(big.Int).Sub(&credits, &debits)
+			balance = float64(diff.Int64()) / 100.0
+		}
+
+		results = append(results, map[string]interface{}{
+			"account_number": acc.AccountNumber,
+			"balance":        balance,
+			"type":           acc.Type,
+			"tb_id":          acc.TBID,
+		})
+	}
+	return results, nil
+}
+
+func (lc *LedgerController) resolveID(id string) (types.Uint128, error) {
+	
+	if strings.Contains(id, ":") {
+		parts := strings.Split(id, ":")
+		id = parts[len(parts)-1]
+	}
+	id = strings.TrimSpace(id)
+
+
+	if id == "1" || id == "SYSTEM" || id == "BANK" {
+		return types.ToUint128(1), nil
+	}
+
+
+	if len(id) >= 30 && len(id) <= 34 {
+		return types.HexStringToUint128(fmt.Sprintf("%032s", id))
+	}
+
+	var user models.Users
+	err := lc.DB.Where("tb_account_id::jsonb @> ?", fmt.Sprintf(`[{"account_number":"%s"}]`, id)).First(&user).Error
+	if err == nil {
+		var accounts []UserAccount
+		json.Unmarshal([]byte(user.TBAccountID), &accounts)
+		for _, acc := range accounts {
+			if acc.AccountNumber == id {
+				return types.HexStringToUint128(fmt.Sprintf("%032s", acc.TBID))
+			}
+		}
+	}
+
+	return types.Uint128{}, fmt.Errorf("identificador de cuenta no reconocido: %s", id)
+}
+
+func (lc *LedgerController) InternalTransfer(from string, to string, amount float64) (string, error) {
+	fromID, errF := lc.resolveID(from)
+	toID, errT := lc.resolveID(to)
+
+	if errF != nil || errT != nil {
+		return "", fmt.Errorf("error de resolución: origen(%v) destino(%v)", errF, errT)
+	}
+
+	amountCentavos := uint64(amount * 100)
+	transferID := types.ID()
+
+
+	res, err := lc.TB.CreateTransfers([]types.Transfer{{
+		ID:              transferID,
+		DebitAccountID:  fromID,
+		CreditAccountID: toID,
+		Amount:          types.ToUint128(amountCentavos),
+		Ledger:          1,
+		Code:            1,
+	}})
+
+	if err != nil {
+		return "", fmt.Errorf("error de red con TigerBeetle: %v", err)
+	}
+	if len(res) > 0 {
+		return "", fmt.Errorf("rechazado por el Ledger: %s", res[0].Result.String())
+	}
+
+	return transferID.String(), nil
+}
+
+func (lc *LedgerController) GetTigerBeetleHistory(userID string, accountNum string) ([]map[string]interface{}, error) {
+	targetID, err := lc.resolveID(accountNum)
+	if err != nil {
+		return nil, err
+	}
+
+	filter := types.AccountFilter{
+		AccountID: targetID,
+		Limit:     10,
+		Flags:     types.AccountFilterFlags{Debits: true, Credits: true}.ToUint32(),
+	}
+
+	transfers, err := lc.TB.GetAccountTransfers(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	var history []map[string]interface{}
+	for _, t := range transfers {
+		tm := time.Unix(0, int64(t.Timestamp))
+		entryType := "CREDIT" 
+		if t.DebitAccountID == targetID {
+			entryType = "DEBIT" 
+		}
+		amountBig := types.Uint128(t.Amount).BigInt()
+		history = append(history, map[string]interface{}{
+			"id":     t.ID.String(),
+			"amount": float64(amountBig.Int64()) / 100.0,
+			"type":   entryType,
+			"date":   tm.Format(time.RFC3339),
+		})
+	}
+	return history, nil
+}
+
 
 // Deposit credits funds from the bank vault into a user-owned account.
 func (ctrl *LedgerController) Deposit(c *gin.Context) {
@@ -366,6 +499,7 @@ func (ctrl *LedgerController) GetHistory(c *gin.Context) {
 			"amount":      amountBig.String(),
 			"date":        tm.Format("2006-01-02 15:04:05"),
 			"code":        t.Code,
+			"tb_id":       acc.TBID,
 			"counterparty": map[string]string{
 				"debit":  t.DebitAccountID.String(),
 				"credit": t.CreditAccountID.String(),
