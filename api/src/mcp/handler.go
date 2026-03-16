@@ -39,21 +39,25 @@ func ChatHandler(engine *MCPEngine, ledger *controllers.LedgerController) gin.Ha
 				acc["account_number"], acc["tb_id"], acc["balance"], acc["currency"])
 		}
 
-	
 		messages := []openai.ChatCompletionMessage{
 			{
 				Role: "system",
-				Content: fmt.Sprintf(`Asistente Nexora. Usuario: %s.
-REGLAS:
-- Cuentas reales: %s
-- PARA RETIRAR: from_account=[CuentaUsuario], to_account="SYSTEM".
-- PARA DEPOSITAR: from_account="SYSTEM", to_account=[CuentaUsuario].
-- Tras transferir, llama a 'get_total_balance' para dar el saldo REAL.
-- Confirma éxito con un ✅.`, userID, accountsInfo),
+				Content: fmt.Sprintf(`Eres el asistente de Nexora Bank. 
+Usuario ID: %s. Cuentas: %s
+
+REGLAS DE OPERACIÓN ESTRICTAS:
+1. HISTORIAL: Tienes la herramienta 'get_history'. ÚSALA SIEMPRE que el usuario pida ver sus movimientos, transacciones o historial. ESTÁ PROHIBIDO decir que no tienes esta función. Si el historial está vacío, dile "No tienes transacciones aún".
+2. PROTOCOLO DE CONFIRMACIÓN:
+   - NUNCA ejecutes 'transfer_funds' a la primera.
+   - Si el usuario pide mover dinero (retiro/depósito/transferencia), resume la acción y pregunta: "¿Deseas confirmar esta operación? (Sí/No)".
+   - SOLO ejecuta si el usuario responde "Sí".
+3. LÓGICA DE DIRECCIÓN:
+   - RETIRO: from_account = [Cuenta_Usuario], to_account = 'SYSTEM'. (NUNCA preguntes el destino).
+   - DEPÓSITO: from_account = 'SYSTEM', to_account = [Cuenta_Usuario].
+4. TRAS TRANSFERIR: Llama a 'get_total_balance' para dar el saldo actualizado.`, userID, accountsInfo),
 			},
 		}
 
-		
 		if input.History != nil {
 			limit := 5
 			if len(input.History) > limit {
@@ -62,25 +66,24 @@ REGLAS:
 				messages = append(messages, input.History...)
 			}
 		}
-		
+
 		messages = append(messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleUser,
 			Content: input.Message,
 		})
 
 		ctx := context.Background()
-		
-	
+
 		resp, err := engine.Client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-			Model:     engine.Model,
-			Messages:  messages,
-			Tools:     GetBankingToolsDefinition(),
+			Model:      engine.Model,
+			Messages:   messages,
+			Tools:      GetBankingToolsDefinition(),
 			ToolChoice: "auto",
-			MaxTokens: 300, 
+			MaxTokens:  300,
 		})
 
 		if err != nil {
-			
+
 			c.JSON(http.StatusOK, gin.H{"reply": "❌ Error de créditos en el motor de IA. Por favor, reduce la longitud de tu consulta o recarga créditos."})
 			return
 		}
@@ -101,18 +104,16 @@ REGLAS:
 				})
 			}
 
-			/
 			finalResp, err := engine.Client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
-				Model:    engine.Model,
-				Messages: messages,
-				MaxTokens: 300,
+				Model:     engine.Model,
+				Messages:  messages,
+				MaxTokens: 800,
 			})
 			if err == nil {
 				msg = finalResp.Choices[0].Message
 			}
 		}
 
-		
 		cleanReply := msg.Content
 		re := regexp.MustCompile(`\(?(tool_call|function|tool_calls).*?(\]|\)|\s|$)`)
 		cleanReply = re.ReplaceAllString(cleanReply, "")

@@ -8,14 +8,18 @@ func GetBankingToolsDefinition() []openai.Tool {
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name:        "get_total_balance",
-				Description: "Consulta el estado actual de todas las cuentas del usuario, incluyendo saldos disponibles y números de cuenta.",
+				Description: "Consulta el saldo real de todas las cuentas del usuario actual directamente desde el ledger.",
+				Parameters: map[string]interface{}{
+					"type":       "object",
+					"properties": map[string]interface{}{},
+				},
 			},
 		},
 		{
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
-				Name:        "get_transaction_history",
-				Description: "Devuelve el saldo real de todas las cuentas del usuario actual directamente desde el ledger.",
+				Name:        "get_history",
+				Description: "Devuelve el historial de transacciones, depósitos, retiros y movimientos de una cuenta bancaria específica.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
@@ -32,26 +36,25 @@ func GetBankingToolsDefinition() []openai.Tool {
 			Type: openai.ToolTypeFunction,
 			Function: &openai.FunctionDefinition{
 				Name: "transfer_funds",
-				// Descripción ultra-detallada para evitar el error de inversión de cuentas
-				Description: "Ejecuta movimientos de dinero en el ledger. " +
-					"REGLAS DE DIRECCIÓN: " +
-					"1. DEPOSITAR: from_account='SYSTEM', to_account='Cuenta_del_Usuario'. " +
-					"2. RETIRAR: from_account='Cuenta_del_Usuario', to_account='SYSTEM'. " +
-					"3. TRANSFERIR: usar números de cuenta reales en ambos campos.",
+				Description: "Ejecuta movimientos de dinero. " +
+					"REGLA: NO preguntes al usuario por la cuenta 'SYSTEM', úsala automáticamente. " +
+					"1. DEPOSITAR: from_account='SYSTEM', to_account='Cuenta_Usuario'. " +
+					"2. RETIRAR: from_account='Cuenta_Usuario', to_account='SYSTEM'. " +
+					"3. TRANSFERIR: usa los números de cuenta reales.",
 				Parameters: map[string]interface{}{
 					"type": "object",
 					"properties": map[string]interface{}{
 						"from_account": map[string]interface{}{
 							"type":        "string",
-							"description": "Cuenta de origen de los fondos. Usar 'SYSTEM' para cargar saldo desde el banco.",
+							"description": "Cuenta origen.",
 						},
 						"to_account": map[string]interface{}{
 							"type":        "string",
-							"description": "Cuenta de destino de los fondos. Usar 'SYSTEM' para retirar dinero hacia el banco.",
+							"description": "Cuenta destino.",
 						},
 						"amount": map[string]interface{}{
 							"type":        "number",
-							"description": "Monto positivo en USD a transferir. No usar valores negativos.",
+							"description": "Monto de la operación.",
 						},
 					},
 					"required": []string{"from_account", "to_account", "amount"},

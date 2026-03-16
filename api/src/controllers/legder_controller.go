@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -38,7 +39,7 @@ type TransferInput struct {
 	Amount          uint64 `json:"amount" binding:"required,gt=0"`
 }
 
-// CreateAccount 
+// CreateAccount
 func (ctrl *LedgerController) CreateAccount(c *gin.Context) {
 	userID := c.MustGet("userID").(string)
 
@@ -98,7 +99,7 @@ func (ctrl *LedgerController) CreateAccount(c *gin.Context) {
 	c.JSON(201, gin.H{"message": "Cuenta creada con éxito", "account": newAcc})
 }
 
-// GetBalance 
+// GetBalance
 func (ctrl *LedgerController) GetBalance(c *gin.Context) {
 	userID := c.MustGet("userID").(string)
 
@@ -153,7 +154,7 @@ func (ctrl *LedgerController) GetBalance(c *gin.Context) {
 	c.JSON(200, gin.H{"accounts": results})
 }
 
-// GetBalancesInternal 
+// GetBalancesInternal
 func (lc *LedgerController) GetBalancesInternal(userID string) ([]map[string]interface{}, error) {
 	var user models.Users
 	if err := lc.DB.Where("uuid_user = ?", userID).First(&user).Error; err != nil {
@@ -187,18 +188,16 @@ func (lc *LedgerController) GetBalancesInternal(userID string) ([]map[string]int
 }
 
 func (lc *LedgerController) resolveID(id string) (types.Uint128, error) {
-	
+
 	if strings.Contains(id, ":") {
 		parts := strings.Split(id, ":")
 		id = parts[len(parts)-1]
 	}
 	id = strings.TrimSpace(id)
 
-
 	if id == "1" || id == "SYSTEM" || id == "BANK" {
 		return types.ToUint128(1), nil
 	}
-
 
 	if len(id) >= 30 && len(id) <= 34 {
 		return types.HexStringToUint128(fmt.Sprintf("%032s", id))
@@ -219,29 +218,55 @@ func (lc *LedgerController) resolveID(id string) (types.Uint128, error) {
 	return types.Uint128{}, fmt.Errorf("identificador de cuenta no reconocido: %s", id)
 }
 
-func (lc *LedgerController) InternalTransfer(from string, to string, amount float64) (string, error) {
-	fromID, errF := lc.resolveID(from)
-	toID, errT := lc.resolveID(to)
+func (lc *LedgerController) InternalTransfer(fromIdentifier string, toIdentifier string, amount float64) (string, error) {
 
-	if errF != nil || errT != nil {
-		return "", fmt.Errorf("error de resolución: origen(%v) destino(%v)", errF, errT)
+	resolve := func(id string) (types.Uint128, error) {
+		id = strings.TrimSpace(id)
+
+		if id == "1" || id == "SYSTEM" {
+			return types.ToUint128(1), nil
+		}
+
+		var targetUser models.Users
+
+		err := lc.DB.Where("tb_account_id::jsonb @> ?", fmt.Sprintf(`[{"account_number":"%s"}]`, id)).First(&targetUser).Error
+
+		if err == nil {
+			var accounts []UserAccount
+			json.Unmarshal([]byte(targetUser.TBAccountID), &accounts)
+			for _, acc := range accounts {
+				if acc.AccountNumber == id {
+					return types.HexStringToUint128(fmt.Sprintf("%032s", acc.TBID))
+				}
+			}
+		}
+		return types.Uint128{}, fmt.Errorf("cuenta %s no encontrada", id)
+	}
+
+	fromTbID, err := resolve(fromIdentifier)
+	if err != nil {
+		return "", fmt.Errorf("origen inválido: %v", err)
+	}
+
+	toTbID, err := resolve(toIdentifier)
+	if err != nil {
+		return "", fmt.Errorf("destino inválido: %v", err)
 	}
 
 	amountCentavos := uint64(amount * 100)
 	transferID := types.ID()
 
-
 	res, err := lc.TB.CreateTransfers([]types.Transfer{{
 		ID:              transferID,
-		DebitAccountID:  fromID,
-		CreditAccountID: toID,
+		DebitAccountID:  fromTbID,
+		CreditAccountID: toTbID,
 		Amount:          types.ToUint128(amountCentavos),
 		Ledger:          1,
 		Code:            1,
 	}})
 
 	if err != nil {
-		return "", fmt.Errorf("error de red con TigerBeetle: %v", err)
+		return "", fmt.Errorf("error de red con TigerBeetle")
 	}
 	if len(res) > 0 {
 		return "", fmt.Errorf("rechazado por el Ledger: %s", res[0].Result.String())
@@ -250,16 +275,31 @@ func (lc *LedgerController) InternalTransfer(from string, to string, amount floa
 	return transferID.String(), nil
 }
 
-func (lc *LedgerController) GetTigerBeetleHistory(userID string, accountNum string) ([]map[string]interface{}, error) {
-	targetID, err := lc.resolveID(accountNum)
+func (lc *LedgerController) GetTigerBeetleHistory(userID string, accountNumber string) ([]map[string]interface{}, error) {
+	var user models.Users
+
+	err := lc.DB.Where("tb_account_id::jsonb @> ?", fmt.Sprintf(`[{"account_number":"%s"}]`, accountNumber)).First(&user).Error
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("la cuenta %s no existe", accountNumber)
+	}
+
+	var accounts []UserAccount
+	json.Unmarshal([]byte(user.TBAccountID), &accounts)
+
+	var targetTBID types.Uint128
+	for _, acc := range accounts {
+		if acc.AccountNumber == accountNumber {
+			targetTBID, _ = types.HexStringToUint128(fmt.Sprintf("%032s", acc.TBID))
+			break
+		}
 	}
 
 	filter := types.AccountFilter{
-		AccountID: targetID,
+		AccountID: targetTBID,
 		Limit:     10,
-		Flags:     types.AccountFilterFlags{Debits: true, Credits: true}.ToUint32(),
+		Flags: types.AccountFilterFlags{
+			Debits: true, Credits: true, Reversed: true,
+		}.ToUint32(),
 	}
 
 	transfers, err := lc.TB.GetAccountTransfers(filter)
@@ -270,9 +310,9 @@ func (lc *LedgerController) GetTigerBeetleHistory(userID string, accountNum stri
 	var history []map[string]interface{}
 	for _, t := range transfers {
 		tm := time.Unix(0, int64(t.Timestamp))
-		entryType := "CREDIT" 
-		if t.DebitAccountID == targetID {
-			entryType = "DEBIT" 
+		entryType := "CREDIT"
+		if t.DebitAccountID == targetTBID {
+			entryType = "DEBIT"
 		}
 		amountBig := types.Uint128(t.Amount).BigInt()
 		history = append(history, map[string]interface{}{
@@ -282,9 +322,9 @@ func (lc *LedgerController) GetTigerBeetleHistory(userID string, accountNum stri
 			"date":   tm.Format(time.RFC3339),
 		})
 	}
+
 	return history, nil
 }
-
 
 // Deposit credits funds from the bank vault into a user-owned account.
 func (ctrl *LedgerController) Deposit(c *gin.Context) {
@@ -499,7 +539,7 @@ func (ctrl *LedgerController) GetHistory(c *gin.Context) {
 			"amount":      amountBig.String(),
 			"date":        tm.Format("2006-01-02 15:04:05"),
 			"code":        t.Code,
-			"tb_id":       acc.TBID,
+			"tb_id":       accountID,
 			"counterparty": map[string]string{
 				"debit":  t.DebitAccountID.String(),
 				"credit": t.CreditAccountID.String(),
@@ -585,151 +625,4 @@ func (lc *LedgerController) ExtractTbID(jsonStr string) (types.Uint128, error) {
 		return types.Uint128{}, fmt.Errorf("tb_id not found in metadata")
 	}
 	return types.HexStringToUint128(accountsData[0].TbID)
-}
-
-// InternalTransfer moves funds between two accounts identified by:
-//   - "1" or "SYSTEM"  → the bank vault (TigerBeetle account 1)
-//   - 32-char hex      → a raw TigerBeetle account ID
-//   - account number   → e.g. "4001-0001-1001", resolved via Postgres JSONB
-//   - UUID             → a user UUID, resolved to their first TB account
-func (lc *LedgerController) InternalTransfer(fromIdentifier string, toIdentifier string, amount float64) (string, error) {
-	var fromTbID types.Uint128
-	var toTbID types.Uint128
-	var err error
-
-	if fromIdentifier == "1" || fromIdentifier == "SYSTEM" {
-		fromTbID = types.ToUint128(1)
-	} else if len(fromIdentifier) >= 31 && len(fromIdentifier) <= 32 {
-		padded := fromIdentifier
-		if len(padded) == 31 {
-			padded = "0" + padded
-		}
-		fromTbID, err = types.HexStringToUint128(padded)
-		if err != nil {
-			return "", fmt.Errorf("identificador origen inválido: %v", err)
-		}
-	} else {
-		var fromUser models.Users
-		if err := lc.DB.Where("uuid_user = ?", fromIdentifier).First(&fromUser).Error; err != nil {
-			return "", fmt.Errorf("source user not found")
-		}
-		fromTbID, err = lc.ExtractTbID(fromUser.TBAccountID)
-		if err != nil {
-			return "", fmt.Errorf("error extracting TBAccountID: %v", err)
-		}
-	}
-
-	if toIdentifier == "1" || toIdentifier == "SYSTEM" {
-		toTbID = types.ToUint128(1)
-	} else if len(toIdentifier) >= 31 && len(toIdentifier) <= 32 {
-		// Pad a 32 chars si tiene 31
-		padded := toIdentifier
-		if len(padded) == 31 {
-			padded = "0" + padded
-		}
-		toTbID, err = types.HexStringToUint128(padded)
-		if err != nil {
-			return "", fmt.Errorf("identificador destino inválido: %v", err)
-		}
-	} else {
-		var toUser models.Users
-		err = lc.DB.Where("tb_account_id::jsonb @> ?", fmt.Sprintf(`[{"account_number":"%s"}]`, toIdentifier)).First(&toUser).Error
-		if err != nil {
-			return "", fmt.Errorf("destination account %s not found", toIdentifier)
-		}
-		var accounts []UserAccount
-		json.Unmarshal([]byte(toUser.TBAccountID), &accounts)
-		for _, acc := range accounts {
-			if acc.AccountNumber == toIdentifier {
-				toTbID, err = types.HexStringToUint128(acc.TBID)
-				if err != nil {
-					return "", fmt.Errorf("malformed tb_id in destination account: %v", err)
-				}
-				break
-			}
-		}
-	}
-
-	amountCentavos := uint64(amount * 100)
-	fmt.Printf("Ledger: From %s -> To %s | Amount: %d cents\n", fromTbID.String(), toTbID.String(), amountCentavos)
-
-	transferID := types.ID()
-	res, err := lc.TB.CreateTransfers([]types.Transfer{
-		{
-			ID:              transferID,
-			DebitAccountID:  fromTbID,
-			CreditAccountID: toTbID,
-			Amount:          types.ToUint128(amountCentavos),
-			Ledger:          1,
-			Code:            1,
-		},
-	})
-	if err != nil {
-		return "", fmt.Errorf("network error with TigerBeetle: %v", err)
-	}
-	if len(res) > 0 {
-		return "", fmt.Errorf("rejected by Ledger: %s", res[0].Result.String())
-	}
-
-	return transferID.String(), nil
-}
-
-// GetTigerBeetleHistory returns the last 10 transactions for a given account number
-// belonging to the specified user. Called by the chat tool get_transaction_history.
-func (lc *LedgerController) GetTigerBeetleHistory(userID string, accountNumber string) ([]map[string]interface{}, error) {
-	var user models.Users
-	err := lc.DB.Where("uuid_user = ?", userID).
-		Where("tb_account_id::jsonb @> ?", fmt.Sprintf(`[{"account_number":"%s"}]`, accountNumber)).
-		First(&user).Error
-	if err != nil {
-		return nil, fmt.Errorf("account %s does not exist or does not belong to your user", accountNumber)
-	}
-
-	var accounts []UserAccount
-	json.Unmarshal([]byte(user.TBAccountID), &accounts)
-
-	var targetTBID types.Uint128
-	for _, acc := range accounts {
-		if acc.AccountNumber == accountNumber {
-			targetTBID, err = types.HexStringToUint128(acc.TBID)
-			if err != nil {
-				return nil, fmt.Errorf("malformed tb_id for account %s: '%s' (%d chars)",
-					accountNumber, acc.TBID, len(acc.TBID))
-			}
-			break
-		}
-	}
-
-	filter := types.AccountFilter{
-		AccountID:    targetTBID,
-		TimestampMin: 0,
-		TimestampMax: 0,
-		Limit:        10,
-		Flags: types.AccountFilterFlags{
-			Debits: true, Credits: true, Reversed: true,
-		}.ToUint32(),
-	}
-
-	transfers, err := lc.TB.GetAccountTransfers(filter)
-	if err != nil {
-		return nil, err
-	}
-
-	var history []map[string]interface{}
-	for _, t := range transfers {
-		tm := time.Unix(0, int64(t.Timestamp))
-		entryType := "CREDIT"
-		if t.DebitAccountID == targetTBID {
-			entryType = "DEBIT"
-		}
-		amountBig := types.Uint128(t.Amount).BigInt()
-		history = append(history, map[string]interface{}{
-			"id":     t.ID.String(),
-			"amount": float64(amountBig.Int64()) / 100.0,
-			"type":   entryType,
-			"date":   tm.Format(time.RFC3339),
-		})
-	}
-
-	return history, nil
 }
